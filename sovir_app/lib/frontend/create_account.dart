@@ -185,7 +185,7 @@ class _CreateAccountPageState extends State<CreateAccountPage>
           .post(
             url,
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'email': email, 'purpose': "RESISTER"}),
+            body: jsonEncode({'email': email, 'purpose': "REGISTER"}),
           )
           .timeout(const Duration(seconds: 10));
 
