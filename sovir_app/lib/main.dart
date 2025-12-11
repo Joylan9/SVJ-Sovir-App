@@ -6,7 +6,7 @@ import 'frontend/login.dart';
 import 'frontend/forgot_password.dart';
 
 // Global theme notifier (you’re already using this)
-final themeNotifier = ValueNotifier<ThemeMode>(ThemeMode.light);
+
 
 void main() {
   runApp(const SovirApp());
@@ -17,18 +17,15 @@ class SovirApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<ThemeMode>(
-      valueListenable: themeNotifier,
-      builder: (context, mode, _) {
-        return MaterialApp(
-          title: 'Sovir App',
-          debugShowCheckedModeBanner: false,
-          themeMode: mode,
-          theme: ThemeData.light(useMaterial3: true),
-          darkTheme: ThemeData.dark(useMaterial3: true),
+    return MaterialApp(
+      title: 'Sovir App',
+      debugShowCheckedModeBanner: false,
+      themeMode: ThemeMode.system,
+      theme: ThemeData.light(useMaterial3: true),
+      darkTheme: ThemeData.dark(useMaterial3: true),
 
           // 👇 Routes
-          initialRoute: '/create-account',
+          initialRoute: '/login',
           routes: {
             '/create-account': (context) => const CreateAccountPage(),
             '/login': (context) => const LoginPage(),
@@ -38,7 +35,5 @@ class SovirApp extends StatelessWidget {
                 const RegistrationSuccessPage(),
           },
         );
-      },
-    );
   }
 }

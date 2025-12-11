@@ -739,30 +739,7 @@ class _CreateAccountPageState extends State<CreateAccountPage>
             ),
           ),
 
-          // Theme Toggle - top-right
-          Align(
-            alignment: Alignment.topRight,
-            child: ValueListenableBuilder<ThemeMode>(
-              valueListenable: themeNotifier,
-              builder: (context, mode, _) {
-                final isDark = Theme.of(context).brightness == Brightness.dark;
-                return IconButton(
-                  onPressed: () {
-                    themeNotifier.value =
-                        isDark ? ThemeMode.light : ThemeMode.dark;
-                  },
-                  icon: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 300),
-                    child: Icon(
-                      isDark ? Icons.light_mode : Icons.dark_mode,
-                      key: ValueKey(isDark),
-                      color: theme.colorScheme.onSurface,
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
+          // Manual Theme Toggle Removed (System Theme enforced)
         ],
       ),
     );

@@ -5,7 +5,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import '../main.dart'; // for themeNotifier
+
 
 class ForgotPasswordPage extends StatefulWidget {
   const ForgotPasswordPage({super.key});
@@ -172,12 +172,12 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> with TickerProv
   Future<void> _resetPassword() async {
     final email = _emailCtrl.text.trim();
     final password = _passwordCtrl.text;
-    final url = Uri.parse('http://10.186.66.138:8080/api/auth/resetpassword');
+    final url = Uri.parse('http://10.186.66.138:8080/api/auth/reset-password');
 
     final response = await http.post(
       url,
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'email': email, 'password': password}),
+      body: jsonEncode({'email': email, 'newPassword': password}),
     ).timeout(const Duration(seconds: 10));
 
     final data = jsonDecode(response.body);

@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import '../main.dart'; // For themeNotifier if needed, but we used Theme.of(context) mostly
+
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -226,7 +226,26 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
                                   ),
                                 ),
                                 
+                                const SizedBox(height: 32),
+                                Row(
+                                  children: [
+                                    Expanded(child: Divider(color: theme.dividerColor)),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                                      child: Text("Or sign in with", style: TextStyle(color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
+                                    ),
+                                    Expanded(child: Divider(color: theme.dividerColor)),
+                                  ],
+                                ),
                                 const SizedBox(height: 24),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    _buildSocialButton(Icons.g_mobiledata, Colors.redAccent, theme),
+                                  ],
+                                ),
+                                const SizedBox(height: 24),
+
                                 TextButton(
                                   onPressed: () {
                                     Navigator.pushReplacementNamed(context, '/create-account');
@@ -260,6 +279,28 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildSocialButton(IconData icon, Color brandColor, ThemeData theme) {
+    final isDark = theme.brightness == Brightness.dark;
+    return Container(
+      width: 50,
+      height: 50,
+      decoration: BoxDecoration(
+        color: isDark
+            ? Colors.white.withValues(alpha: 0.05)
+            : Colors.grey.withValues(alpha: 0.1),
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: theme.dividerColor,
+        ),
+      ),
+      child: InkWell(
+        onTap: () => HapticFeedback.selectionClick(),
+        customBorder: const CircleBorder(),
+        child: Icon(icon, color: brandColor),
       ),
     );
   }
