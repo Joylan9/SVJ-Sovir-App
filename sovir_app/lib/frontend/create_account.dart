@@ -3,6 +3,9 @@ import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // Import the global theme notifier to allow toggling
 import '../main.dart';
@@ -14,15 +17,21 @@ class CreateAccountPage extends StatefulWidget {
   State<CreateAccountPage> createState() => _CreateAccountPageState();
 }
 
+enum RegistrationStage { email, otp, password }
+
 class _CreateAccountPageState extends State<CreateAccountPage>
     with TickerProviderStateMixin {
   // --- Logic & State ---
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final TextEditingController _emailCtrl = TextEditingController();
+  final TextEditingController _nameCtrl = TextEditingController();
+  final TextEditingController _otpCtrl = TextEditingController();
   final TextEditingController _passwordCtrl = TextEditingController();
   final TextEditingController _confirmCtrl = TextEditingController();
 
   final FocusNode _emailFocus = FocusNode();
+  final FocusNode _nameFocus = FocusNode();
+  final FocusNode _otpFocus = FocusNode();
   final FocusNode _passwordFocus = FocusNode();
   final FocusNode _confirmFocus = FocusNode();
   final ScrollController _scrollController = ScrollController();
@@ -35,7 +44,11 @@ class _CreateAccountPageState extends State<CreateAccountPage>
   bool _passwordVisible = false;
   bool _confirmVisible = false;
   double _scrollParallax = 0.0;
+  
+  RegistrationStage _currentStage = RegistrationStage.email;
   Timer? _debounce;
+  Timer? _resendTimer;
+  int _resendSeconds = 0;
 
   @override
   void initState() {
@@ -57,12 +70,17 @@ class _CreateAccountPageState extends State<CreateAccountPage>
   @override
   void dispose() {
     _debounce?.cancel();
+    _resendTimer?.cancel();
     _emailCtrl.removeListener(_onEmailChanged);
     _scrollController.dispose();
     _emailCtrl.dispose();
+    _nameCtrl.dispose();
+    _otpCtrl.dispose();
     _passwordCtrl.dispose();
     _confirmCtrl.dispose();
     _emailFocus.dispose();
+    _nameFocus.dispose();
+    _otpFocus.dispose();
     _passwordFocus.dispose();
     _confirmFocus.dispose();
     _entryAnimCtrl.dispose();
@@ -102,14 +120,20 @@ class _CreateAccountPageState extends State<CreateAccountPage>
   }
 
   bool get _isFormValid {
-    final email = _emailCtrl.text.trim();
-    final pw = _passwordCtrl.text;
-    final confirm = _confirmCtrl.text;
-    final emailOk = email.isNotEmpty && isValidEmail(email);
-    // Ideally require score == 4, but let's be lenient for demo
-    final pwOk = passwordStrengthCount(pw) >= 3;
-    final confirmOk = confirm.isNotEmpty && confirm == pw;
-    return emailOk && pwOk && confirmOk && _agreeTerms;
+    if (_currentStage == RegistrationStage.email) {
+      final email = _emailCtrl.text.trim();
+      return email.isNotEmpty && isValidEmail(email);
+    } else if (_currentStage == RegistrationStage.otp) {
+      return _otpCtrl.text.trim().length >= 4; // Assuming 4-6 digit OTP
+    } else {
+      final name = _nameCtrl.text.trim();
+      final pw = _passwordCtrl.text;
+      final confirm = _confirmCtrl.text;
+      // Ideally require score == 4, but let's be lenient for demo
+      final pwOk = passwordStrengthCount(pw) >= 3;
+      final confirmOk = confirm.isNotEmpty && confirm == pw;
+      return name.isNotEmpty && pwOk && confirmOk && _agreeTerms;
+    }
   }
 
   Future<void> _submit() async {
@@ -124,19 +148,137 @@ class _CreateAccountPageState extends State<CreateAccountPage>
     setState(() => _isSubmitting = true);
 
     try {
-      // Simulate Network Call
-      await Future.delayed(const Duration(seconds: 2));
-
-      if (mounted) {
-        _showToast("Account created successfully!");
-
-        // ✅ Redirect to profile page
-        Navigator.pushReplacementNamed(context, '/profile');
+      if (_currentStage == RegistrationStage.email) {
+        await _sendOtp();
+      } else if (_currentStage == RegistrationStage.otp) {
+        await _verifyOtp();
+      } else {
+        await _registerUser();
       }
     } catch (err) {
-      if (mounted) _showToast("An error occurred", isError: true);
+      // Remove "Exception:" or similar prefixes if present, though we strive to throw clear strings
+      if (mounted) _showToast(err.toString().replaceAll("Exception: ", ""), isError: true);
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  void _startResendTimer() {
+    _resendSeconds = 180; // 3 minutes
+    _resendTimer?.cancel();
+    _resendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_resendSeconds > 0) {
+        setState(() {
+          _resendSeconds--;
+        });
+      } else {
+        timer.cancel();
+      }
+    });
+  }
+
+  Future<void> _sendOtp() async {
+    final email = _emailCtrl.text.trim();
+    final url = Uri.parse('http://10.186.66.138:8080/api/auth/send');
+    try {
+      final response = await http
+          .post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'email': email, 'purpose': "RESISTER"}),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        if (mounted) {
+          _showToast(data['message'] ?? "OTP sent to $email");
+          setState(() {
+            _currentStage = RegistrationStage.otp;
+            _entryAnimCtrl.reset();
+            _entryAnimCtrl.forward();
+            _startResendTimer();
+          });
+        }
+      } else {
+        throw data['message'] ?? "Failed to send OTP";
+      }
+    } catch (e) {
+      throw e.toString();
+    }
+  }
+
+  Future<void> _verifyOtp() async {
+    final email = _emailCtrl.text.trim();
+    final otp = _otpCtrl.text.trim();
+    final url = Uri.parse('http://10.186.66.138:8080/api/auth/verify');
+
+    try {
+      final response = await http
+          .post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'email': email, 'otp': otp, 'purpose': 'REGISTER'}),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        if (mounted) {
+          _showToast(data['message'] ?? "OTP Verified");
+          setState(() {
+            _currentStage = RegistrationStage.password;
+            _entryAnimCtrl.reset();
+            _entryAnimCtrl.forward();
+          });
+        }
+      } else {
+        throw data['message'] ?? "Invalid OTP";
+      }
+    } catch (e) {
+      throw e.toString();
+    }
+  }
+
+  Future<void> _registerUser() async {
+    final email = _emailCtrl.text.trim();
+    final name = _nameCtrl.text.trim();
+    final password = _passwordCtrl.text;
+    final url = Uri.parse('http://10.186.66.138:8080/api/auth/register');
+
+    try {
+      final response = await http
+          .post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'email': email, 'fullName': name, 'password': password}),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 201 || (data['success'] == true)) {
+        if (mounted) {
+          _showToast(data['message'] ?? "Account created successfully!");
+          
+          // Store token if available (Auto-login)
+          if (data['token'] != null) {
+             SharedPreferences prefs = await SharedPreferences.getInstance();
+             await prefs.setString('token', data['token']);
+             if (data['role'] != null) await prefs.setString('role', data['role']);
+             if (data['userId'] != null) {
+                await prefs.setInt('userId', data['userId'] is int ? data['userId'] : int.tryParse(data['userId'].toString()) ?? 0);
+             }
+          }
+
+          // Redirect to profile page
+          Navigator.pushReplacementNamed(context, '/profile');
+        }
+      } else {
+        throw data['message'] ?? "Registration failed";
+      }
+    } catch (e) {
+      throw e.toString();
     }
   }
 
@@ -151,7 +293,9 @@ class _CreateAccountPageState extends State<CreateAccountPage>
               color: Colors.white,
             ),
             const SizedBox(width: 12),
-            Text(message, style: const TextStyle(color: Colors.white)),
+            Expanded(
+              child: Text(message, style: const TextStyle(color: Colors.white)),
+            ),
           ],
         ),
         backgroundColor: isError ? theme.colorScheme.error : theme.primaryColor,
@@ -261,128 +405,211 @@ class _CreateAccountPageState extends State<CreateAccountPage>
     final subTextColor = theme.colorScheme.onSurface
         .withValues(alpha: 0.6); // was .withOpacity(0.6)
 
-    final children = [
+    final children = <Widget>[
       const SizedBox(height: 8),
 
-      _buildGlassTextField(
-        controller: _emailCtrl,
-        focusNode: _emailFocus,
-        label: "Email Address",
-        icon: Icons.email_outlined,
-        theme: theme,
-        inputType: TextInputType.emailAddress,
-        validator: (v) => !isValidEmail(v ?? '') && (v ?? '').isNotEmpty
-            ? 'Invalid email'
-            : null,
-      ),
-      const SizedBox(height: 20),
-
-      _buildGlassTextField(
-        controller: _passwordCtrl,
-        focusNode: _passwordFocus,
-        label: "Password",
-        icon: Icons.lock_outline,
-        theme: theme,
-        isPassword: true,
-        isVisible: _passwordVisible,
-        onVisibilityToggle: () =>
-            setState(() => _passwordVisible = !_passwordVisible),
-        onChanged: (_) => setState(() {}),
-      ),
-
-      // Strength + requirement checklist
-      AnimatedSize(
-        duration: const Duration(milliseconds: 300),
-        child: _passwordCtrl.text.isNotEmpty
-            ? Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildStrengthIndicator(theme),
-                    const SizedBox(height: 12),
-                    _buildPasswordRequirements(theme),
-                  ],
-                ),
-              )
-            : const SizedBox.shrink(),
-      ),
-
-      const SizedBox(height: 20),
-
-      _buildGlassTextField(
-        controller: _confirmCtrl,
-        focusNode: _confirmFocus,
-        label: "Confirm Password",
-        icon: Icons.lock_reset_outlined,
-        theme: theme,
-        isPassword: true,
-        isVisible: _confirmVisible,
-        onVisibilityToggle: () =>
-            setState(() => _confirmVisible = !_confirmVisible),
-        validator: (v) =>
-            v != _passwordCtrl.text ? 'Passwords do not match' : null,
-      ),
-
-      const SizedBox(height: 24),
-
-      // Custom Checkbox Row
-      GestureDetector(
-        onTap: () {
-          HapticFeedback.lightImpact();
-          setState(() => _agreeTerms = !_agreeTerms);
-        },
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
+      if (_currentStage == RegistrationStage.email) ...[
+        _buildGlassTextField(
+          controller: _emailCtrl,
+          focusNode: _emailFocus,
+          label: "Email Address",
+          icon: Icons.email_outlined,
+          theme: theme,
+          inputType: TextInputType.emailAddress,
+          validator: (v) => !isValidEmail(v ?? '') && (v ?? '').isNotEmpty
+              ? 'Invalid email'
+              : null,
+        ),
+      ] else if (_currentStage == RegistrationStage.otp) ...[
+        Text(
+          "Enter the OTP sent to ${_emailCtrl.text}",
+          style: theme.textTheme.bodyMedium?.copyWith(color: subTextColor),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 16),
+        _buildGlassTextField(
+          controller: _otpCtrl,
+          focusNode: _otpFocus,
+          label: "OTP Code",
+          icon: Icons.lock_clock_outlined,
+          theme: theme,
+          inputType: TextInputType.number,
+        ),
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(
-                color: _agreeTerms ? theme.primaryColor : Colors.transparent,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: _agreeTerms
-                      ? theme.primaryColor
-                      : theme.colorScheme.outline.withValues(
-                          alpha: 0.5,
-                        ), // was .withOpacity(0.5)
-                  width: 2,
-                ),
-              ),
-              child: _agreeTerms
-                  ? const Icon(Icons.check, size: 16, color: Colors.white)
-                  : null,
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  _currentStage = RegistrationStage.email;
+                  _entryAnimCtrl.reset();
+                  _entryAnimCtrl.forward();
+                });
+              },
+              child: const Text("Change Email"),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: RichText(
-                text: TextSpan(
-                  style:
-                      theme.textTheme.bodySmall?.copyWith(color: subTextColor),
-                  children: [
-                    const TextSpan(text: "I agree to the "),
-                    TextSpan(
-                      text: "Terms of Service",
-                      style: TextStyle(
-                          color: theme.primaryColor,
-                          fontWeight: FontWeight.bold),
-                    ),
-                    const TextSpan(text: " and "),
-                    TextSpan(
-                      text: "Privacy Policy",
-                      style: TextStyle(
-                          color: theme.primaryColor,
-                          fontWeight: FontWeight.bold),
-                    ),
-                  ],
+            TextButton(
+              onPressed: _resendSeconds == 0
+                  ? () async {
+                      setState(() => _isSubmitting = true);
+                      try {
+                          final email = _emailCtrl.text.trim();
+                          final url = Uri.parse('http://10.186.66.138:8080/api/auth/resend'); 
+                          final response = await http.post(
+                            url,
+                            headers: {'Content-Type': 'application/json'},
+                            body: jsonEncode({'email': email, 'purpose': "RESISTER"}),
+                          ).timeout(const Duration(seconds: 10));
+                          
+                          final data = jsonDecode(response.body);
+                          if (response.statusCode == 200 && data['success'] == true) {
+                             _showToast(data['message'] ?? "OTP Resent");
+                             _startResendTimer();
+                          } else {
+                             _showToast(data['message'] ?? "Failed to resend", isError: true);
+                          }
+                      } catch (e) {
+                          _showToast(e.toString().replaceAll("Exception: ", ""), isError: true);
+                      } finally {
+                          if (mounted) setState(() => _isSubmitting = false);
+                      }
+                    }
+                  : null,
+              child: Text(
+                _resendSeconds > 0
+                    ? "Resend in ${_resendSeconds ~/ 60}:${(_resendSeconds % 60).toString().padLeft(2, '0')}"
+                    : "Resend OTP",
+                style: TextStyle(
+                  color: _resendSeconds == 0
+                       ? theme.primaryColor 
+                       : theme.disabledColor,
                 ),
               ),
             ),
           ],
         ),
-      ),
+      ] else ...[
+        // Password Stage
+        
+        _buildGlassTextField(
+          controller: _nameCtrl,
+          focusNode: _nameFocus,
+          label: "Full Name",
+          icon: Icons.person_outline,
+          theme: theme,
+          inputType: TextInputType.name,
+          validator: (v) => (v ?? '').trim().isEmpty ? 'Name required' : null,
+        ),
+        const SizedBox(height: 20),
+
+        _buildGlassTextField(
+          controller: _passwordCtrl,
+          focusNode: _passwordFocus,
+          label: "Password",
+          icon: Icons.lock_outline,
+          theme: theme,
+          isPassword: true,
+          isVisible: _passwordVisible,
+          onVisibilityToggle: () =>
+              setState(() => _passwordVisible = !_passwordVisible),
+          onChanged: (_) => setState(() {}),
+        ),
+
+        // Strength + requirement checklist
+        AnimatedSize(
+          duration: const Duration(milliseconds: 300),
+          child: _passwordCtrl.text.isNotEmpty
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildStrengthIndicator(theme),
+                      const SizedBox(height: 12),
+                      _buildPasswordRequirements(theme),
+                    ],
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+
+        const SizedBox(height: 20),
+
+        _buildGlassTextField(
+          controller: _confirmCtrl,
+          focusNode: _confirmFocus,
+          label: "Confirm Password",
+          icon: Icons.lock_reset_outlined,
+          theme: theme,
+          isPassword: true,
+          isVisible: _confirmVisible,
+          onVisibilityToggle: () =>
+              setState(() => _confirmVisible = !_confirmVisible),
+          validator: (v) =>
+              v != _passwordCtrl.text ? 'Passwords do not match' : null,
+        ),
+
+        const SizedBox(height: 24),
+
+        // Custom Checkbox Row
+        GestureDetector(
+          onTap: () {
+            HapticFeedback.lightImpact();
+            setState(() => _agreeTerms = !_agreeTerms);
+          },
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: _agreeTerms ? theme.primaryColor : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: _agreeTerms
+                        ? theme.primaryColor
+                        : theme.colorScheme.outline.withValues(
+                            alpha: 0.5,
+                          ), // was .withOpacity(0.5)
+                    width: 2,
+                  ),
+                ),
+                child: _agreeTerms
+                    ? const Icon(Icons.check, size: 16, color: Colors.white)
+                    : null,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: RichText(
+                  text: TextSpan(
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: subTextColor),
+                    children: [
+                      const TextSpan(text: "I agree to the "),
+                      TextSpan(
+                        text: "Terms of Service",
+                        style: TextStyle(
+                            color: theme.primaryColor,
+                            fontWeight: FontWeight.bold),
+                      ),
+                      const TextSpan(text: " and "),
+                      TextSpan(
+                        text: "Privacy Policy",
+                        style: TextStyle(
+                            color: theme.primaryColor,
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
 
       const SizedBox(height: 32),
 
@@ -391,55 +618,61 @@ class _CreateAccountPageState extends State<CreateAccountPage>
 
       const SizedBox(height: 32),
 
-      Row(
-        children: [
-          Expanded(child: Divider(color: theme.dividerColor)),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child:
-                Text("Or sign up with", style: TextStyle(color: subTextColor)),
-          ),
-          Expanded(child: Divider(color: theme.dividerColor)),
-        ],
-      ),
+      if (_currentStage == RegistrationStage.email) ...[
+        Row(
+          children: [
+            Expanded(child: Divider(color: theme.dividerColor)),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text("Or sign up with",
+                  style: TextStyle(color: subTextColor)),
+            ),
+            Expanded(child: Divider(color: theme.dividerColor)),
+          ],
+        ),
 
-      const SizedBox(height: 24),
+        const SizedBox(height: 24),
 
-      Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          _buildSocialButton(Icons.g_mobiledata, Colors.redAccent, theme),
-          const SizedBox(width: 20),
-          _buildSocialButton(
-              Icons.apple, isDark ? Colors.white : Colors.black, theme),
-          const SizedBox(width: 20),
-          _buildSocialButton(Icons.facebook, const Color(0xFF1877F2), theme),
-        ],
-      ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _buildSocialButton(
+                Icons.g_mobiledata, Colors.redAccent, theme),
+            const SizedBox(width: 20),
+            _buildSocialButton(Icons.apple,
+                isDark ? Colors.white : Colors.black, theme),
+            const SizedBox(width: 20),
+            _buildSocialButton(
+                Icons.facebook, const Color(0xFF1877F2), theme),
+          ],
+        ),
 
-      const SizedBox(height: 40),
+        const SizedBox(height: 40),
 
-      Center(
-        child: TextButton(
-          onPressed: () {},
-          child: RichText(
-            text: TextSpan(
-              text: "Already have an account? ",
-              style: TextStyle(color: subTextColor),
-              children: [
-                TextSpan(
-                  text: "Log In",
-                  style: TextStyle(
-                    color: theme.primaryColor,
-                    fontWeight: FontWeight.bold,
-                    decoration: TextDecoration.underline,
+        Center(
+          child: TextButton(
+             onPressed: () {
+               Navigator.pushReplacementNamed(context, '/login');
+             },
+            child: RichText(
+              text: TextSpan(
+                text: "Already have an account? ",
+                style: TextStyle(color: subTextColor),
+                children: [
+                  TextSpan(
+                    text: "Log In",
+                    style: TextStyle(
+                      color: theme.primaryColor,
+                      fontWeight: FontWeight.bold,
+                      decoration: TextDecoration.underline,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
-      ),
+      ],
     ];
 
     // Apply Staggered Animation
@@ -796,7 +1029,11 @@ class _CreateAccountPageState extends State<CreateAccountPage>
                       ),
                     )
                   : Text(
-                      "Create Account",
+                      _currentStage == RegistrationStage.email
+                          ? "Get OTP"
+                          : _currentStage == RegistrationStage.otp
+                              ? "Verify OTP"
+                              : "Create Account",
                       style: theme.textTheme.titleMedium?.copyWith(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,

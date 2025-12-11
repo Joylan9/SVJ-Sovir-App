@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'frontend/create_account.dart';
 import 'frontend/profile.dart';
 import 'frontend/registration_success.dart';
+import 'frontend/login.dart';
+import 'frontend/forgot_password.dart';
 
 // Global theme notifier (you’re already using this)
 final themeNotifier = ValueNotifier<ThemeMode>(ThemeMode.light);
@@ -29,6 +31,8 @@ class SovirApp extends StatelessWidget {
           initialRoute: '/create-account',
           routes: {
             '/create-account': (context) => const CreateAccountPage(),
+            '/login': (context) => const LoginPage(),
+            '/forgot-password': (context) => const ForgotPasswordPage(),
             '/profile': (context) => const CreateProfilePage(),
             '/registration-success': (context) =>
                 const RegistrationSuccessPage(),
